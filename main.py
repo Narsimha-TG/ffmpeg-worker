@@ -2,13 +2,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess
 import httpx
+import base64
 import uuid
 import os
 
 app = FastAPI()
 
 class SceneRequest(BaseModel):
-    image_url: str
+    image_url: str | None = None
+    image_base64: str | None = None
     audio_base64: str | None = None
     audio_url: str | None = None
     scene_number: int = 1
@@ -21,18 +23,23 @@ async def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_scene_{data.scene_number}.mp4"
 
     try:
-        # 1. Download image
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(data.image_url)
+        # 1. Save Image (Handles both Base64 and URL)
+        if data.image_base64:
             with open(img_path, "wb") as f:
-                f.write(resp.content)
+                f.write(base64.b64decode(data.image_base64))
+        elif data.image_url and data.image_url.startswith("http"):
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(data.image_url)
+                with open(img_path, "wb") as f:
+                    f.write(resp.content)
+        else:
+            raise HTTPException(status_code=400, detail="Valid image_base64 or image_url is required")
 
-        # 2. Save audio
+        # 2. Save Audio (Handles both Base64 and URL)
         if data.audio_base64:
-            import base64
             with open(audio_path, "wb") as f:
                 f.write(base64.b64decode(data.audio_base64))
-        elif data.audio_url:
+        elif data.audio_url and data.audio_url.startswith("http"):
             async with httpx.AsyncClient() as client:
                 resp = await client.get(data.audio_url)
                 with open(audio_path, "wb") as f:
@@ -53,11 +60,10 @@ async def render_scene(data: SceneRequest):
         ]
         subprocess.run(cmd, check=True)
 
-        # Read binary video
+        # 4. Read Rendered Binary Video
         with open(output_path, "rb") as f:
             video_bytes = f.read()
 
-        import base64
         return {
             "status": "success",
             "scene_number": data.scene_number,
