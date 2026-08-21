@@ -23,13 +23,14 @@ def get_audio_duration(audio_path: str) -> float:
     ]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        return float(result.stdout.strip())
+        dur = float(result.stdout.strip())
+        return round(dur, 2)
     except Exception:
-        return 5.0  # Fallback duration if probe fails
+        return 5.0
 
 @app.get("/")
 def home():
-    return {"status": "running", "worker": "FFmpeg Stable Worker"}
+    return {"status": "running", "worker": "FFmpeg Turbo Renderer"}
 
 @app.post("/render-scene")
 def render_scene(data: SceneRequest):
@@ -39,40 +40,39 @@ def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_out.mp4"
 
     try:
-        # 1. Save Base64 to disk
+        # 1. Save inputs
         with open(img_path, "wb") as f:
             f.write(base64.b64decode(data.image_base64))
 
         with open(audio_path, "wb") as f:
             f.write(base64.b64decode(data.audio_base64))
 
-        # Free memory
         data.image_base64 = ""
         data.audio_base64 = ""
         gc.collect()
 
-        # 2. Get exact audio duration
+        # 2. Get exact duration
         duration = get_audio_duration(audio_path)
 
-        # 3. Explicit duration render (Super fast & No Infinite Loop)
+        # 3. Blazing Fast Encoding (1 fps for static image, instant render)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1",
-            "-framerate", "24",
-            "-t", str(duration),
             "-i", img_path,
             "-i", audio_path,
             "-c:v", "libx264",
             "-tune", "stillimage",
             "-preset", "ultrafast",
+            "-r", "2",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "128k",
-            "-threads", "2",
+            "-b:a", "96k",
+            "-t", str(duration),
+            "-movflags", "+faststart",
             output_path
         ]
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
 
         if result.returncode != 0:
             raise Exception(f"FFmpeg error: {result.stderr.decode('utf-8', errors='ignore')}")
