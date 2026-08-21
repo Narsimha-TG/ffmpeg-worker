@@ -30,7 +30,7 @@ def get_audio_duration(audio_path: str) -> float:
 
 @app.get("/")
 def home():
-    return {"status": "running", "worker": "FFmpeg Turbo Renderer"}
+    return {"status": "running", "worker": "FFmpeg Ultra-Fast"}
 
 @app.post("/render-scene")
 def render_scene(data: SceneRequest):
@@ -54,25 +54,25 @@ def render_scene(data: SceneRequest):
         # 2. Get exact duration
         duration = get_audio_duration(audio_path)
 
-        # 3. Blazing Fast Encoding (1 fps for static image, instant render)
+        # 3. Instant Render Command (-t is applied directly to the image loop input)
         cmd = [
             "ffmpeg", "-y",
+            "-t", str(duration),
             "-loop", "1",
+            "-framerate", "1",
             "-i", img_path,
             "-i", audio_path,
             "-c:v", "libx264",
             "-tune", "stillimage",
             "-preset", "ultrafast",
-            "-r", "2",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "96k",
-            "-t", str(duration),
-            "-movflags", "+faststart",
+            "-shortest",
             output_path
         ]
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
 
         if result.returncode != 0:
             raise Exception(f"FFmpeg error: {result.stderr.decode('utf-8', errors='ignore')}")
