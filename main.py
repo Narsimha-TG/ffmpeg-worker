@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess
-import httpx
 import base64
 import uuid
 import os
@@ -10,10 +9,8 @@ import asyncio
 app = FastAPI()
 
 class SceneRequest(BaseModel):
-    image_url: str | None = None
-    image_base64: str | None = None
-    audio_base64: str | None = None
-    audio_url: str | None = None
+    image_base64: str
+    audio_base64: str
     scene_number: int = 1
 
 @app.get("/")
@@ -28,46 +25,15 @@ async def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_scene_{data.scene_number}.mp4"
 
     try:
-        # 1. Download/Save Image with Strong Fallback & Retry
-        if data.image_base64:
-            with open(img_path, "wb") as f:
-                f.write(base64.b64decode(data.image_base64))
-        elif data.image_url and data.image_url.startswith("http"):
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            downloaded = False
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                for attempt in range(4):
-                    try:
-                        resp = await client.get(data.image_url, headers=headers)
-                        if resp.status_code == 200 and len(resp.content) > 1000:
-                            with open(img_path, "wb") as f:
-                                f.write(resp.content)
-                            downloaded = True
-                            break
-                    except Exception:
-                        pass
-                    await asyncio.sleep(2)
-            
-            if not downloaded:
-                raise Exception("Failed to fetch image from Pollinations (Timeout or Server Busy)")
-        else:
-            raise HTTPException(status_code=400, detail="Valid image is required")
+        # 1. Decode & Save Image
+        with open(img_path, "wb") as f:
+            f.write(base64.b64decode(data.image_base64))
 
-        # 2. Save Audio
-        if data.audio_base64:
-            with open(audio_path, "wb") as f:
-                f.write(base64.b64decode(data.audio_base64))
-        elif data.audio_url and data.audio_url.startswith("http"):
-            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-                resp = await client.get(data.audio_url)
-                with open(audio_path, "wb") as f:
-                    f.write(resp.content)
-        else:
-            raise HTTPException(status_code=400, detail="Valid audio is required")
+        # 2. Decode & Save Audio
+        with open(audio_path, "wb") as f:
+            f.write(base64.b64decode(data.audio_base64))
 
-        # 3. Super-Fast Low RAM FFmpeg Render (720p)
+        # 3. Super Fast FFmpeg 720p Render
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", img_path,
