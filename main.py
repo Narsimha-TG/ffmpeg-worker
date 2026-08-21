@@ -45,9 +45,9 @@ async def render_scene(data: SceneRequest):
                         break
                     await asyncio.sleep(2)
             if not downloaded:
-                raise Exception("Failed to download image from Pollinations")
+                raise Exception("Failed to fetch image from Pollinations")
         else:
-            raise HTTPException(status_code=400, detail="Image is required")
+            raise HTTPException(status_code=400, detail="Valid image is required")
 
         # 2. Save Audio
         if data.audio_base64:
@@ -59,14 +59,14 @@ async def render_scene(data: SceneRequest):
                 with open(audio_path, "wb") as f:
                     f.write(resp.content)
         else:
-            raise HTTPException(status_code=400, detail="Audio is required")
+            raise HTTPException(status_code=400, detail="Valid audio is required")
 
-        # 3. Super Lightweight FFmpeg Command (Prevents 512MB RAM Crash)
+        # 3. Super Lightweight FFmpeg Render (720p Ken Burns - Won't Crash Render 512MB RAM)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", img_path,
             "-i", audio_path,
-            "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.001,1.15)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=24",
+            "-vf", "scale=1280:720,zoompan=z='min(zoom+0.001,1.15)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1280x720:fps=24",
             "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",
             "-threads", "1",
@@ -84,7 +84,6 @@ async def render_scene(data: SceneRequest):
         if process.returncode != 0:
             raise Exception(f"FFmpeg error: {stderr.decode('utf-8', errors='ignore')}")
 
-        # 4. Read Result
         with open(output_path, "rb") as f:
             video_bytes = f.read()
 
