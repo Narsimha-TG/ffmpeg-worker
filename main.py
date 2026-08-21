@@ -40,10 +40,10 @@ def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_out.mp4"
 
     try:
-        # 1. నేరుగా URL నుండి ఇమేజ్ డౌన్‌లోడ్ చేసుకోవడం
+        # 1. ఇమేజ్ డౌన్‌లోడ్ (టైమ్‌అవుట్ 60 సెకన్లకు పెంచబడింది)
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = urllib.request.Request(data.image_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as response:
+        with urllib.request.urlopen(req, timeout=60) as response:
             img_bytes = response.read()
 
         if len(img_bytes) < 2000:
@@ -52,7 +52,7 @@ def render_scene(data: SceneRequest):
         with open(img_path, "wb") as f:
             f.write(img_bytes)
 
-        # 2. ఆడియో సేవ్ చేయడం
+        # 2. ఆడియో డీకోడింగ్
         audio_bytes = base64.b64decode(data.audio_base64)
         with open(audio_path, "wb") as f:
             f.write(audio_bytes)
@@ -63,7 +63,7 @@ def render_scene(data: SceneRequest):
 
         duration = get_audio_duration(audio_path)
 
-        # 3. వీడియో రెండరింగ్
+        # 3. FFmpeg రెండరింగ్ (అల్ట్రా ఫాస్ట్)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1",
@@ -80,7 +80,7 @@ def render_scene(data: SceneRequest):
             output_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
 
         if result.returncode != 0:
             raise Exception(f"FFmpeg failed: {result.stderr}")
