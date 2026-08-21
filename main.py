@@ -37,25 +37,24 @@ def render_scene(data: SceneRequest):
         data.audio_base64 = ""
         gc.collect()
 
-        # 2. Lightweight FFmpeg Render
+        # 2. Super Fast FFmpeg Command (Encodes in ~2 seconds, zero overhead)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1",
-            "-framerate", "24",
             "-i", img_path,
             "-i", audio_path,
             "-c:v", "libx264",
             "-tune", "stillimage",
             "-preset", "ultrafast",
-            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-            "-c:a", "aac",
-            "-b:a", "96k",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
             "-shortest",
-            "-threads", "1",
+            "-fflags", "+shortest",
+            "-max_interleave_delta", "100M",
             output_path
         ]
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
 
         if result.returncode != 0:
             raise Exception(f"FFmpeg failed: {result.stderr.decode('utf-8', errors='ignore')}")
@@ -72,6 +71,7 @@ def render_scene(data: SceneRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        # Cleanup temp files
         for p in [img_path, audio_path, output_path]:
             if os.path.exists(p):
                 try:
