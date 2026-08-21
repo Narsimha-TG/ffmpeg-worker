@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import List
 import subprocess
 import base64
 import uuid
@@ -13,6 +14,9 @@ class SceneRequest(BaseModel):
     image_url: str
     audio_base64: str
     scene_number: int = 1
+
+class ConcatRequest(BaseModel):
+    videos_base64: List[str]
 
 def get_audio_duration(audio_path: str) -> float:
     cmd = [
@@ -30,7 +34,7 @@ def get_audio_duration(audio_path: str) -> float:
 
 @app.get("/")
 def home():
-    return {"status": "running", "worker": "FFmpeg URL Renderer"}
+    return {"status": "running", "worker": "FFmpeg Master Renderer"}
 
 @app.post("/render-scene")
 def render_scene(data: SceneRequest):
@@ -40,7 +44,6 @@ def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_out.mp4"
 
     try:
-        # 1. ఇమేజ్ డౌన్‌లోడ్ (టైమ్‌అవుట్ 60 సెకన్లకు పెంచబడింది)
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = urllib.request.Request(data.image_url, headers=headers)
         with urllib.request.urlopen(req, timeout=60) as response:
@@ -52,7 +55,6 @@ def render_scene(data: SceneRequest):
         with open(img_path, "wb") as f:
             f.write(img_bytes)
 
-        # 2. ఆడియో డీకోడింగ్
         audio_bytes = base64.b64decode(data.audio_base64)
         with open(audio_path, "wb") as f:
             f.write(audio_bytes)
@@ -63,7 +65,6 @@ def render_scene(data: SceneRequest):
 
         duration = get_audio_duration(audio_path)
 
-        # 3. FFmpeg రెండరింగ్ (అల్ట్రా ఫాస్ట్)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1",
@@ -81,7 +82,6 @@ def render_scene(data: SceneRequest):
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-
         if result.returncode != 0:
             raise Exception(f"FFmpeg failed: {result.stderr}")
 
@@ -104,4 +104,59 @@ def render_scene(data: SceneRequest):
                     os.remove(p)
                 except Exception:
                     pass
+        gc.collect()
+
+@app.post("/concat-videos")
+def concat_videos(data: ConcatRequest):
+    req_id = str(uuid.uuid4())[:8]
+    list_file_path = f"/tmp/{req_id}_list.txt"
+    output_path = f"/tmp/{req_id}_final.mp4"
+    video_files = []
+
+    try:
+        # 1. ప్రతి వీడియో బేస్‌64ని తాత్కాలిక ఫైల్స్‌గా సేవ్ చేయడం
+        for idx, v_b64 in enumerate(data.videos_base64):
+            v_path = f"/tmp/{req_id}_v_{idx}.mp4"
+            v_bytes = base64.b64decode(v_b64)
+            with open(v_path, "wb") as f:
+                f.write(v_bytes)
+            video_files.append(v_path)
+
+        # 2. FFmpeg concat కోసం లిస్ట్ ఫైల్ తయారు చేయడం
+        with open(list_file_path, "w") as f:
+            for v_path in video_files:
+                f.write(f"file '{v_path}'\n")
+
+        # 3. అన్ని వీడియోలను కలపడం
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_file_path,
+            "-c", "copy",
+            output_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise Exception(f"FFmpeg Concat failed: {result.stderr}")
+
+        with open(output_path, "rb") as f:
+            final_bytes = f.read()
+
+        return {
+            "status": "success",
+            "final_video_base64": base64.b64encode(final_bytes).decode("utf-8")
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(list_file_path):
+            os.remove(list_file_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        for v_path in video_files:
+            if os.path.exists(v_path):
+                os.remove(v_path)
         gc.collect()
