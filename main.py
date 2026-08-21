@@ -26,7 +26,7 @@ def get_audio_duration(audio_path: str) -> float:
         dur = float(result.stdout.strip())
         return round(dur, 2)
     except Exception:
-        return 5.0
+        return 6.0
 
 @app.get("/")
 def home():
@@ -40,26 +40,31 @@ def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_out.mp4"
 
     try:
-        # 1. Save and validate image
+        # 1. Base64 డీకోడ్ మరియు సైజ్ చెక్
         img_bytes = base64.b64decode(data.image_base64)
-        if len(img_bytes) < 1000:
-            raise Exception(f"Invalid image received from n8n (size: {len(img_bytes)} bytes)")
+        audio_bytes = base64.b64decode(data.audio_base64)
+
+        if len(img_bytes) < 2000:
+            raise Exception(f"Image data is too small or corrupt (size: {len(img_bytes)} bytes)")
+        if len(audio_bytes) < 2000:
+            raise Exception(f"Audio data is too small or corrupt (size: {len(audio_bytes)} bytes)")
 
         with open(img_path, "wb") as f:
             f.write(img_bytes)
 
-        # 2. Save audio
         with open(audio_path, "wb") as f:
-            f.write(base64.b64decode(data.audio_base64))
+            f.write(audio_bytes)
 
+        # మెమరీ క్లియర్
         data.image_base64 = ""
         data.audio_base64 = ""
+        del img_bytes, audio_bytes
         gc.collect()
 
-        # 3. Get exact duration
+        # 2. ఆడియో నిడివిని లెక్కించడం
         duration = get_audio_duration(audio_path)
 
-        # 4. Standard FFmpeg video render
+        # 3. వేగవంతమైన FFmpeg ఎన్‌కోడింగ్
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1",
@@ -70,15 +75,16 @@ def render_scene(data: SceneRequest):
             "-preset", "ultrafast",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "128k",
+            "-b:a", "96k",
             "-t", str(duration),
+            "-movflags", "+faststart",
             output_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
 
         if result.returncode != 0:
-            raise Exception(f"FFmpeg error: {result.stderr}")
+            raise Exception(f"FFmpeg failed: {result.stderr}")
 
         with open(output_path, "rb") as f:
             video_bytes = f.read()
