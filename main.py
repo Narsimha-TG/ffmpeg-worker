@@ -5,6 +5,7 @@ import httpx
 import base64
 import uuid
 import os
+import asyncio
 
 app = FastAPI()
 
@@ -27,22 +28,28 @@ async def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_scene_{data.scene_number}.mp4"
 
     try:
-        # 1. Download/Save Image (With 60s timeout for Pollinations)
+        # 1. Download Image with Retry & Timeout
         if data.image_base64:
             with open(img_path, "wb") as f:
                 f.write(base64.b64decode(data.image_base64))
         elif data.image_url and data.image_url.startswith("http"):
             headers = {"User-Agent": "Mozilla/5.0"}
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                resp = await client.get(data.image_url, headers=headers)
-                if resp.status_code != 200:
-                    raise Exception(f"Failed to fetch image: HTTP {resp.status_code}")
-                with open(img_path, "wb") as f:
-                    f.write(resp.content)
+            downloaded = False
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+                for _ in range(3):
+                    resp = await client.get(data.image_url, headers=headers)
+                    if resp.status_code == 200:
+                        with open(img_path, "wb") as f:
+                            f.write(resp.content)
+                        downloaded = True
+                        break
+                    await asyncio.sleep(2)
+            if not downloaded:
+                raise Exception(f"Failed to fetch image: HTTP {resp.status_code if 'resp' in locals() else 'error'}")
         else:
             raise HTTPException(status_code=400, detail="Valid image is required")
 
-        # 2. Download/Save Audio
+        # 2. Save Audio
         if data.audio_base64:
             with open(audio_path, "wb") as f:
                 f.write(base64.b64decode(data.audio_base64))
@@ -54,23 +61,29 @@ async def render_scene(data: SceneRequest):
         else:
             raise HTTPException(status_code=400, detail="Valid audio is required")
 
-        # 3. FFmpeg Ken Burns 1080p Render
+        # 3. Optimized Low-Memory FFmpeg Render
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", img_path,
             "-i", audio_path,
-            "-vf", "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0015,1.2)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=25",
-            "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
+            "-vf", "scale=1920:1080,zoompan=z='min(zoom+0.001,1.15)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=24",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-threads", "1",
             "-shortest",
             output_path
         ]
         
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
-            raise Exception(f"FFmpeg error: {result.stderr}")
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            raise Exception(f"FFmpeg error: {stderr.decode('utf-8', errors='ignore')}")
 
-        # 4. Return Video Base64
         with open(output_path, "rb") as f:
             video_bytes = f.read()
 
