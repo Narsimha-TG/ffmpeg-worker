@@ -28,24 +28,30 @@ async def render_scene(data: SceneRequest):
     output_path = f"/tmp/{req_id}_scene_{data.scene_number}.mp4"
 
     try:
-        # 1. Download/Save Image
+        # 1. Download/Save Image with Strong Fallback & Retry
         if data.image_base64:
             with open(img_path, "wb") as f:
                 f.write(base64.b64decode(data.image_base64))
         elif data.image_url and data.image_url.startswith("http"):
-            headers = {"User-Agent": "Mozilla/5.0"}
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
             downloaded = False
-            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-                for _ in range(3):
-                    resp = await client.get(data.image_url, headers=headers)
-                    if resp.status_code == 200:
-                        with open(img_path, "wb") as f:
-                            f.write(resp.content)
-                        downloaded = True
-                        break
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                for attempt in range(4):
+                    try:
+                        resp = await client.get(data.image_url, headers=headers)
+                        if resp.status_code == 200 and len(resp.content) > 1000:
+                            with open(img_path, "wb") as f:
+                                f.write(resp.content)
+                            downloaded = True
+                            break
+                    except Exception:
+                        pass
                     await asyncio.sleep(2)
+            
             if not downloaded:
-                raise Exception("Failed to fetch image from Pollinations")
+                raise Exception("Failed to fetch image from Pollinations (Timeout or Server Busy)")
         else:
             raise HTTPException(status_code=400, detail="Valid image is required")
 
@@ -54,22 +60,21 @@ async def render_scene(data: SceneRequest):
             with open(audio_path, "wb") as f:
                 f.write(base64.b64decode(data.audio_base64))
         elif data.audio_url and data.audio_url.startswith("http"):
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
                 resp = await client.get(data.audio_url)
                 with open(audio_path, "wb") as f:
                     f.write(resp.content)
         else:
             raise HTTPException(status_code=400, detail="Valid audio is required")
 
-        # 3. Super Lightweight FFmpeg Render (720p Ken Burns - Won't Crash Render 512MB RAM)
+        # 3. Super-Fast Low RAM FFmpeg Render (720p)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", img_path,
             "-i", audio_path,
-            "-vf", "scale=1280:720,zoompan=z='min(zoom+0.001,1.15)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1280x720:fps=24",
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
             "-c:a", "aac", "-b:a", "128k",
-            "-threads", "1",
             "-shortest",
             output_path
         ]
